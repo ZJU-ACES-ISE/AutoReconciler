@@ -5,25 +5,50 @@ from gplearn.functions import add2, sub2, mul2, div2, _Function
 from sympy import simplify
 
 
-class SingleRuleGenerator:
+def read_words(filename):
+    with open(filename, 'r') as file:
+        words = [line.strip() for line in file.readlines()]
+    return words
 
+
+dic = {
+    'VALUE:AMT': read_words('./dictionary/value_amt.txt'),
+    'VALUE:RATE': read_words('./dictionary/value_rate.txt'),
+    'VALUE:NUM': read_words('./dictionary/value_num.txt')
+}
+
+
+class SimulatedDataset:
     def __init__(self, n_features, support, size, seed: np.random.RandomState,
                  n_confused_column=0, n_ext_column=0,
-                 init_depth=(2, 2), init_method='half and half',
-                 rule_number=0):
+                 with_column_names=False,
+                 init_depth=(2, 2), init_method='half and half'):
+        """
+        :param n_features: the number of features(columns) in the assertion
+        :param support: support
+        :param size: the number of records(rows)
+        :param seed: the seed to generate data
+        :param n_confused_column: the number of additional data columns which are filled with obfuscation
+        :param n_ext_column: the number of additional data columns
+        :param with_column_names: if use real column names (names are the result of generated or real data after desensitization)
+        :param init_depth: init depth (min, max)
+        :param init_method: init method: 'half and half' | 'full'
+        """
         self.n_features = n_features
         self.support = support
         self.size = size
 
         while True:
             fit = 0
+            random_state = np.random.RandomState(seed.randint(100))
             program = Program(function_map={add2: 0.4, sub2: 0.4, mul2: 0.1, div2: 0.1},
                               arities={2: [add2, sub2, mul2, div2]},
                               init_depth=init_depth,
                               init_method=init_method,
                               n_features=n_features,
+                              with_column_names=with_column_names,
                               const_range=(-1.0, 1.0),
-                              random_state=np.random.RandomState(seed.randint(100)))
+                              random_state=random_state)
 
             input = np.array([1000 * seed.randn(n_features) for i in range(size)]).round(2)
             sym = str(program.simplify())
@@ -50,101 +75,45 @@ class SingleRuleGenerator:
 
             self.program = program
             self.formular = sym
-            columns = ['Y']
-            columns.extend([f'X{j}' for j in range(n_features)])
+
+            if with_column_names:
+                columns = [program.label_name]
+                columns.extend(program.feature_names)
+            else:
+                columns = ['Y']
+                columns.extend([f'X{j}' for j in range(n_features)])
 
             final = np.column_stack((output, input))
             if n_ext_column > 0:
-                columns.extend([f'EX{j}' for j in range(n_ext_column)])
+                if with_column_names:
+                    columns.extend([generate_name(None, random_state) for j in range(n_ext_column)])
+                else:
+                    columns.extend([f'EX{j}' for j in range(n_ext_column)])
                 final = np.column_stack((final, ext_column))
             if n_confused_column > 0:
-                columns.extend([f'CX{j}' for j in range(n_confused_column)])
+                if with_column_names:
+                    columns.extend([generate_name(None, random_state) for j in range(n_ext_column)])
+                else:
+                    columns.extend([f'CX{j}' for j in range(n_confused_column)])
                 final = np.column_stack((final, confused_column))
             self.data = pd.DataFrame(final, columns=columns)
             self.fit_rate = fit / size
             break
 
-
-class MultipleRuleGenerator:
-
-    def __init__(self, n_features, support, size, seed: np.random.RandomState,
-                 n_ext_column=0,
-                 init_depth=(2, 2), init_method='half and half',
-                 n_rule=0):
-        self.n_features = n_features
-        self.support = support
-        self.size = size
-        self.program = []
-        self.formular = []
-        self.fit_rate = []
-
-
-        input = []
-        output = []
-        for i in range(n_rule):
-            while True:
-                fit = 0
-                program = Program(function_map={add2: 0.4, sub2: 0.4, mul2: 0.1, div2: 0.1},
-                                  arities={2: [add2, sub2, mul2, div2]},
-                                  init_depth=init_depth,
-                                  init_method=init_method,
-                                  n_features=n_features,
-                                  const_range=(-1.0, 1.0),
-                                  random_state=np.random.RandomState(seed.randint(100)))
-
-                input.append(np.array([1000 * seed.randn(n_features) for i in range(size)]).round(2))
-                sym = str(program.simplify())
-                if 'zoo' in sym or 'X' not in sym:
-                    continue
-
-                output.append(program.execute(input[i]))
-                for j in range(len(output[i])):
-                    if seed.uniform(0, 1) > support:
-                        try:
-                            output[i][j] = seed.uniform(-abs(output[i][j]), abs(output[i][j])) + output[i][j]
-                        except Exception:
-                            continue
-                    else:
-                        fit += 1
-                self.program.append(program)
-                self.formular.append(sym)
-                self.fit_rate.append(fit / size)
-                break
-
-        # confused_column = []
-        # for i in range(n_confused_column):
-        #     tmp = output * seed.uniform(-1, 1)
-        #     confused_column.append(tmp)
-        # confused_column = np.array(confused_column).round(2).T
-
-        ext_column = np.array([1000 * seed.randn(n_ext_column) for i in range(size)]).round(2)
-
-        columns = []
-        final = None
-        for i in range(n_rule):
-            columns.append('Y' + str(i))
-            columns.extend([f'X{j}' for j in range(n_features * i, n_features * (i + 1))])
-            if final is None:
-                final = np.column_stack((output[i], input[i]))
-            else:
-                final = np.column_stack((final, output[i], input[i]))
-
-        if n_ext_column > 0:
-            columns.extend([f'EX{j}' for j in range(n_ext_column)])
-            final = np.column_stack((final, ext_column))
-        # if n_confused_column > 0:
-        #     columns.extend([f'CX{j}' for j in range(n_confused_column)])
-        #     final = np.column_stack((final, confused_column))
-        self.data = pd.DataFrame(final, columns=columns)
+    def to_csv(self, path):
+        self.data.to_csv(path)
 
 
 class Program:
+    types = ['VALUE:AMT', 'VALUE:NUM', 'VALUE:RATE']
+
     def __init__(self,
                  function_map,
                  arities,
                  init_depth,
                  init_method,
                  n_features,
+                 with_column_names,
                  const_range,
                  random_state,
                  program=None):
@@ -154,7 +123,11 @@ class Program:
         self.init_depth = (init_depth[0], init_depth[1] + 1)
         self.init_method = init_method
         self.n_features = n_features
+        self.with_column_names = with_column_names,
         self.feature_names = None
+        self.label_name = None
+        self.feature_types = None
+        self.label_type = None
         self.const_range = const_range
         self.program = program
 
@@ -164,6 +137,10 @@ class Program:
         else:
             # Create a naive random program
             self.program = self.build_program(random_state)
+            while not self.check_semantics():
+                self.program = self.build_program(random_state)
+            if with_column_names:
+                self.fill_names(random_state)
 
         self.raw_fitness_ = None
         self.fitness_ = None
@@ -202,6 +179,12 @@ class Program:
                 function -= rate
         program = [function]
         terminal_stack = [function.arity]
+
+        # random set types
+        if self.with_column_names:
+            rt = random_state.randint(0, 3, size=self.n_features)
+            self.feature_types = [self.types[ii] for ii in rt]
+            self.label_type = self.types[random_state.randint(0, 3)]
 
         while terminal_stack:
             depth = len(terminal_stack)
@@ -298,7 +281,7 @@ class Program:
                 output += node.name + '('
             else:
                 if isinstance(node, int):
-                    if self.feature_names is None:
+                    if self.feature_names is None or self.label_name is None:
                         output += 'X%s' % node
                     else:
                         output += self.feature_names[node]
@@ -373,7 +356,114 @@ class Program:
                 program[i] = f'X{program[i]}'
         return simplify(program[0])
 
+    def check_semantics(self):
+        allowed = {
+            'add': [
+                ('VALUE:AMT', 'VALUE:AMT', 'VALUE:AMT'),
+                ('VALUE:NUM', 'VALUE:NUM', 'VALUE:NUM'),
+                ('VALUE:RATE', 'VALUE:RATE', 'VALUE:RATE'),
+            ],
+            'sub': [
+                ('VALUE:AMT', 'VALUE:AMT', 'VALUE:AMT'),
+                ('VALUE:NUM', 'VALUE:NUM', 'VALUE:NUM'),
+                ('VALUE:RATE', 'VALUE:RATE', 'VALUE:RATE'),
+            ],
+            'mul': [
+                ('VALUE:AMT', 'VALUE:NUM', 'VALUE:AMT'),
+                ('VALUE:AMT', 'VALUE:RATE', 'VALUE:AMT'),
+                ('VALUE:NUM', 'VALUE:AMT', 'VALUE:AMT'),
+                ('VALUE:NUM', 'VALUE:RATE', 'VALUE:NUM'),
+                ('VALUE:RATE', 'VALUE:AMT', 'VALUE:AMT'),
+                ('VALUE:RATE', 'VALUE:NUM', 'VALUE:NUM'),
+                ('VALUE:RATE', 'VALUE:RATE', 'VALUE:RATE'),
+            ],
+            'div': [
+                ('VALUE:AMT', 'VALUE:AMT', ['VALUE:NUM', 'VALUE:RATE']),
+                ('VALUE:AMT', 'VALUE:NUM', 'VALUE:AMT'),
+                ('VALUE:AMT', 'VALUE:RATE', 'VALUE:AMT'),
+                ('VALUE:NUM', 'VALUE:NUM', 'VALUE:RATE'),
+                ('VALUE:RATE', 'VALUE:RATE', 'VALUE:RATE'),
+            ]
+        }
+        node = self.program[0]
+        if isinstance(node, float) or self.label_type == 'VALUE':
+            return True
+        elif isinstance(node, int):
+            return self.feature_types[node] == 'VALUE' or self.label_type == self.feature_types[node]
+
+        apply_stack = []
+        for node in self.program:
+            if isinstance(node, _Function):
+                apply_stack.append([node])
+            elif isinstance(node, int):
+                # Lazily evaluate later
+                apply_stack[-1].append(self.feature_types[node])
+            else:
+                apply_stack[-1].append('VALUE')
+
+            while len(apply_stack[-1]) == apply_stack[-1][0].arity + 1:
+                # Apply functions that have sufficient arguments
+                function = apply_stack[-1][0]
+                intermediate_result = []
+                if function.name in allowed.keys():
+                    for rule in allowed[function.name]:
+                        match = True
+                        for i in range(function.arity):
+                            var_type = apply_stack[-1][i + 1]
+                            if isinstance(var_type, str) and rule[i] != var_type and var_type != 'VALUE':
+                                match = False
+                                break
+                            elif isinstance(var_type, list) and rule[i] not in var_type:
+                                match = False
+                                break
+                        if match:
+                            intermediate_result.append(rule[-1])
+                    if len(intermediate_result) == 0:
+                        return False
+                    elif len(intermediate_result) == 1:
+                        intermediate_result = intermediate_result[0]
+                else:
+                    intermediate_result = 'VALUE'
+                if len(apply_stack) != 1:
+                    apply_stack.pop()
+                    apply_stack[-1].append(intermediate_result)
+                else:
+                    if intermediate_result == 'VALUE':
+                        return True
+                    elif isinstance(intermediate_result, str):
+                        return self.label_type == intermediate_result
+                    elif isinstance(intermediate_result, list):
+                        return self.label_type in intermediate_result
+        # We should never get here
+        return None
+
+    def fill_names(self, random_state):
+        self.label_name = generate_name(self.label_type, random_state)
+        self.feature_names = []
+        for t in self.feature_types:
+            self.feature_names.append(generate_name(t, random_state))
+
+
+def generate_name(type, random_state):
+    choices = []
+    if type is None:
+        choices.extend(dic['VALUE:AMT'])
+        choices.extend(dic['VALUE:RATE'])
+        choices.extend(dic['VALUE:NUM'])
+    else:
+        choices.extend(dic[type])
+    return random_state.choice(choices)
+
 
 if __name__ == '__main__':
-    # SingleRuleGenerator(n_features=2, support=0.8, size=1000, n_confused_column=3, n_ext_column=2, seed=np.random.RandomState(0))
-    MultipleRuleGenerator(n_features=2, support=0.8, size=1000, seed=np.random.RandomState(0), n_rule=2)
+
+    # generate sample data (in sample_data.zip)
+    for i in range(50):
+        dataset = SimulatedDataset(n_features=3, support=0.8, size=10000,
+                                   n_confused_column=1, n_ext_column=1,
+                                   with_column_names=False,
+                                   init_depth=(2, 2), init_method='half and half',
+                                   seed=np.random.RandomState(i))
+        dataset.to_csv(f"./sample_data/x_3_sup_0.8_cx_1_ex_1_without_name_{i}.csv")
+
+# %%
