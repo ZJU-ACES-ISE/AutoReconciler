@@ -28,6 +28,7 @@ class SimulatedDataset:
        :param seed: the seed to generate data
        :param n_confused_column: the number of additional data columns which are filled with obfuscation
        :param n_ext_column: the number of additional data columns
+       :param with_column_names: if use real column names (names are the result of generated or real data after desensitization)
        :param init_depth: init depth (min, max)
        :param init_method: init method: 'half and half' | 'full'
        """
@@ -44,6 +45,7 @@ if __name__ == '__main__':
     for i in range(50): # generate 50 groups of data
         dataset = SimulatedDataset(n_features=3, support=0.8, size=10000,
                                    n_confused_column=1, n_ext_column=1,
+                                   with_column_names=False,
                                    init_depth=(2, 2), init_method='half and half',
                                    seed=np.random.RandomState(i))
         dataset.to_csv(f"./x_3_sup_0.8_cx_1_ex_1_{i}.csv")
